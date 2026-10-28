@@ -192,7 +192,7 @@ wss.on('connection', (ws) => {
       const sid = String(m.sid || ''), session = String(m.session || '');
       if (!/^[\w-]{3,40}$/.test(sid) || !/^[\w-]{8,64}$/.test(session)) return;
       const tracks = (Array.isArray(m.tracks) ? m.tracks : []).slice(0, 4)
-        .map((t) => ({ name: String((t && t.name) || '').slice(0, 40), kind: t && t.kind === 'audio' ? 'audio' : 'video' })).filter((t) => t.name);
+        .map((t) => ({ name: String((t && t.name) || '').slice(0, 40), kind: t && t.kind === 'audio' ? 'audio' : 'video', simul: !!(t && t.simul) })).filter((t) => t.name);
       if (!tracks.length) return;
       const old = r.pubs.get(sid);
       if (old && old.tok !== ws.tok) return; // ninguém assume a transmissão de outra pessoa
