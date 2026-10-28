@@ -166,4 +166,8 @@ wss.on('connection', (ws) => {
   });
 });
 
+// Mantém as conexões vivas: hospedagens como o Render derrubam WebSockets parados, o que desconectava a sala.
+setInterval(() => wss.clients.forEach((c) => { if (c.isAlive === false) return c.terminate(); c.isAlive = false; try { c.ping(); } catch {} }), 25000);
+wss.on('connection', (c) => { c.isAlive = true; c.on('pong', () => (c.isAlive = true)); });
+
 server.listen(PORT, () => console.log('ScreenCast rodando na porta ' + PORT));
