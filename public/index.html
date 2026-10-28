@@ -385,13 +385,15 @@ html.cinema .col{display:none}
       </div>
       <div class="acts">
         <div class="dd" id="dd">
-          <select id="mode" hidden><option value="720-30">720-30</option><option value="1080-30" selected>1080-30</option><option value="720-60">720-60</option><option value="1080-60">1080-60</option></select>
+          <select id="mode" hidden><option value="720-30">720-30</option><option value="1080-30" selected>1080-30</option><option value="720-60">720-60</option><option value="1080-60">1080-60</option><option value="1440-30">1440-30</option><option value="1440-60">1440-60</option></select>
           <button type="button" class="btn dd-btn" id="modeBtn" aria-haspopup="listbox" aria-expanded="false" aria-label="Qualidade"><span id="modeLabel">1080p · 30 fps</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg></button>
           <div class="dd-menu" id="modeMenu" role="listbox" aria-label="Qualidade" hidden>
             <button type="button" role="option" class="dd-item" data-v="720-30" aria-selected="false"><span><b>720p · 30 fps</b><small>Leve, conexão fraca</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
             <button type="button" role="option" class="dd-item" data-v="1080-30" aria-selected="true"><span><b>1080p · 30 fps</b><small>Nítido, texto e apps</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
             <button type="button" role="option" class="dd-item" data-v="720-60" aria-selected="false"><span><b>720p · 60 fps</b><small>Jogos, conexão média</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
             <button type="button" role="option" class="dd-item" data-v="1080-60" aria-selected="false"><span><b>1080p · 60 fps</b><small>Jogos, máxima fluidez</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+            <button type="button" role="option" class="dd-item" data-v="1440-30" aria-selected="false"><span><b>2K · 30 fps</b><small>Muito nítido, exige boa internet</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+            <button type="button" role="option" class="dd-item" data-v="1440-60" aria-selected="false"><span><b>2K · 60 fps</b><small>Máximo, exige PC e internet fortes</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
           </div>
         </div>
         <select id="amode" hidden data-label="Áudio da transmissão"><option value="system" data-desc="Tudo que toca no PC, inclusive Discord">Áudio do sistema</option><option value="window" data-desc="Só o app ou guia escolhido. Não pega Discord">Só do app/guia (sem Discord)</option><option value="off" data-desc="Transmitir sem som">Sem áudio</option></select>
@@ -770,7 +772,7 @@ function preferH264(transceivers) {
 function applyQuality() {
   if (!local || !pubScreen) return;
   const [qh, qf] = $('mode').value.split('-').map(Number); const game = qf === 60;
-  const base = qh === 720 ? (game ? 5_000_000 : 3_500_000) : (game ? 9_000_000 : 6_000_000);
+  const base = qh === 720 ? (game ? 5_000_000 : 3_500_000) : qh === 1080 ? (game ? 9_000_000 : 6_000_000) : (game ? 16_000_000 : 10_000_000);
   const bitrate = Math.max(300_000, Math.round(base * qScale));
   pubScreen.pc.getSenders().forEach(async (s) => {
     if (!s.track) return;
