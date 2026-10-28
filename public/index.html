@@ -306,6 +306,9 @@ html.cinema .col{display:none}
 .dd.sel .ddl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dd.sel .ddl.ph{color:var(--z500)}
 .panel .dd.sel .dd-btn{height:42px;font-size:14px}
+.acts .dd.sel{width:auto}
+.acts .dd.sel .dd-btn{width:auto;height:36px;font-size:13px;font-weight:600;padding:0 12px;gap:10px}
+@media(max-width:640px){.acts .dd.sel{width:100%}.acts .dd.sel .dd-btn{width:100%}}
 .dd-menu.fl{position:fixed;top:0;left:0;right:auto;bottom:auto;z-index:60;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:rgba(var(--ov),.22) transparent}
 .dd-menu.fl::-webkit-scrollbar{width:6px}
 .dd-menu.fl::-webkit-scrollbar-track{background:transparent;margin:8px 0}
@@ -825,6 +828,7 @@ function syncMute(tile) {
 }
 let toastTimer;
 function toast(msg) {
+  if (!msg) return; // toast vazio aparecia como uma bolinha no meio da tela
   const t = $('toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 8000);
 }
