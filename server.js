@@ -80,6 +80,29 @@ async function sfuProxy(req, res) {
   }
 }
 
+
+// ---------- pré-visualização do link (Discord, WhatsApp, Telegram...) ----------
+// Banner: salve a imagem como public/og.png (1200x630) ou defina OG_IMAGE com o link direto da imagem.
+// Se o site estiver atrás de proxy com outro domínio, defina PUBLIC_URL (ex.: https://meusite.com.br).
+const STATIC = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.svg': 'image/svg+xml' };
+const OG_TITLE = 'variosbeck ScreenCast — Transmissão de Tela em Grupo Online Grátis';
+const OG_DESC = 'Compartilhe tela, voz ou câmera com várias pessoas ao mesmo tempo, direto do navegador. Sem cadastro: crie uma sala e envie o link.';
+const escAttr = (v) => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function ogTags(req, urlPath) {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || (req.socket.encrypted ? 'https' : 'http');
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const base = (process.env.PUBLIC_URL || `${proto}://${host}`).replace(/\/+$/, '');
+  const hasLocal = fs.existsSync(path.join(__dirname, 'public', 'og.png'));
+  const img = process.env.OG_IMAGE || (hasLocal ? `${base}/og.png` : '');
+  const t = [
+    ['property', 'og:type', 'website'], ['property', 'og:site_name', 'variosbeck ScreenCast'], ['property', 'og:locale', 'pt_BR'],
+    ['property', 'og:title', OG_TITLE], ['property', 'og:description', OG_DESC], ['property', 'og:url', base + encodeURI(urlPath)],
+    ['name', 'twitter:card', img ? 'summary_large_image' : 'summary'], ['name', 'twitter:title', OG_TITLE], ['name', 'twitter:description', OG_DESC],
+  ];
+  if (img) t.push(['property', 'og:image', img], ['name', 'twitter:image', img]);
+  return t.map(([k, n, c]) => `<meta ${k}="${n}" content="${escAttr(c)}">`).join('\n');
+}
+
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/sfu/')) return void sfuProxy(req, res);
   if (req.url === '/rooms') {
@@ -96,9 +119,19 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ iceServers, sfu: SFU_ON }));
     });
   }
-  fs.readFile(path.join(__dirname, 'public', 'index.html'), (err, data) => {
-    res.writeHead(err ? 500 : 200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(data);
+  let urlPath = req.url.split('?')[0]; try { urlPath = decodeURIComponent(urlPath); } catch {}
+  const ext = path.extname(urlPath).toLowerCase();
+  if (STATIC[ext]) { // imagens da pasta public (banner og.png, ícones)
+    return fs.readFile(path.join(__dirname, 'public', path.basename(urlPath)), (err, data) => {
+      if (err) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'Content-Type': STATIC[ext], 'Cache-Control': 'public, max-age=3600' });
+      res.end(data);
+    });
+  }
+  fs.readFile(path.join(__dirname, 'public', 'index.html'), 'utf8', (err, html) => {
+    if (err) { res.writeHead(500); return res.end(); }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html.replace('</head>', ogTags(req, urlPath) + '\n</head>'));
   });
 });
 
