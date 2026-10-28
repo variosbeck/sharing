@@ -75,6 +75,13 @@ main{display:flex;flex-direction:column;gap:16px;padding-bottom:calc(20px + env(
 body{background:radial-gradient(900px 480px at 50% -8%,rgba(var(--ac),.12),transparent 70%),var(--bg);background-attachment:fixed}
 #home{max-width:460px;padding-top:11vh;gap:20px}
 .hero{display:grid;gap:12px;justify-items:start}
+#home .gatehead{display:none}
+body.gate #home{max-width:400px;padding-top:18vh;gap:16px}
+body.gate .hero,body.gate #code,body.gate #vis,body.gate #vhint,body.gate #pubopts,body.gate #live-rooms,body.gate .feats{display:none!important}
+body.gate #home .gatehead{display:grid;gap:10px;justify-items:start}
+.gatehead h1{margin:0;font-size:clamp(1.6rem,6vw,2.1rem);line-height:1.1;letter-spacing:-.03em;font-weight:700}
+.gatehead .chip{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 12px;border-radius:999px;border:1px solid rgba(var(--ov),.14);background:rgba(var(--ov),.05);font-size:13px;color:var(--z300)}
+body.gate #name{height:48px;font-size:16px;border-color:rgba(var(--ac),.55)}
 #home h1{font-size:clamp(2rem,7vw,2.75rem);line-height:1.08;letter-spacing:-.035em;font-weight:700}
 #home .hero p{font-size:15px;max-width:38ch;margin:0}
 .panel{display:grid;gap:12px;border:1px solid var(--line);border-radius:20px;background:var(--panel);padding:20px;backdrop-filter:blur(10px)}
@@ -326,6 +333,7 @@ html.cinema .col{display:none}
     <h1>Compartilhe sua tela<br>em segundos</h1>
     <p>Crie uma sala e envie o link. Todo mundo que entrar pode compartilhar a própria tela.</p>
   </div>
+  <div class="gatehead"><span class="logo"><i></i>ScreenCast</span><h1>Entrar na sala</h1><span class="chip" id="gateRoom"></span><p>Digite seu nome para entrar na transmissão.</p></div>
   <div class="panel">
     <input id="name" placeholder="Seu nome" maxlength="24" autocomplete="nickname" aria-label="Seu nome">
     <input id="code" placeholder="Nome da sala (ex.: amigos)" maxlength="30" autocomplete="off" aria-label="Nome da sala">
@@ -480,7 +488,7 @@ $('create').onclick = () => {
   const room = slug($('code').value) || Math.random().toString(36).slice(2, 8);
   if (room.length < 3) { $('msg').textContent = 'O nome da sala precisa ter ao menos 3 letras ou números.'; return; }
   if (['ice', 'rooms', 'ws', 'sfu'].includes(room)) { $('msg').textContent = 'Esse nome de sala é reservado.'; return; }
-  if (!isPublic && !$('pass').value) { $('msg').textContent = 'Salas privadas precisam de senha.'; $('pass').focus(); return; }
+  if (!document.body.classList.contains('gate') && !isPublic && !$('pass').value) { $('msg').textContent = 'Salas privadas precisam de senha.'; $('pass').focus(); return; }
   $('code').value = room; start(room);
 };
 async function loadRooms() {
@@ -946,6 +954,7 @@ function leave(text) {
   Object.keys(peers).forEach(removePeer);
   ws && ws.close();
   $('room').hidden = true; $('home').hidden = false; $('msg').textContent = text;
+  if (document.body.classList.contains('gate')) { document.body.classList.remove('gate'); $('create').textContent = 'Criar ou entrar na sala'; $('code').value = ''; $('pass').value = ''; setVis(true); }
   history.replaceState(null, '', '/'); renderGates();
 }
 // ---------- menu de qualidade ----------
@@ -1280,6 +1289,18 @@ const EMO = '😀😂🤣😊😍😎🤔😅😭😡👍👎👏🙏🔥❤️�
 EMO.forEach((e) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = e; b.onclick = () => { const i = $('cin'); i.setRangeText(e, i.selectionStart, i.selectionEnd, 'end'); i.focus(); }; $('emojis').append(b); });
 $('emojiBtn').onclick = (ev) => { ev.stopPropagation(); $('emojis').hidden = !$('emojis').hidden; };
 document.addEventListener('click', (ev) => { if (!$('emojis').hidden && !$('emojis').contains(ev.target)) $('emojis').hidden = true; });
+// ---------- entrada direta pelo link da sala ----------
+(function gateMode() {
+  const r = slug(pathRoom && !pathRoom.includes('.') ? pathRoom : params.get('sala') || '');
+  if (!r || r.length < 3 || ['ice', 'rooms', 'ws', 'sfu'].includes(r)) return;
+  document.body.classList.add('gate');
+  $('gateRoom').textContent = r; $('code').value = r; $('create').textContent = 'Entrar na sala';
+  setVis(false); $('pass').hidden = true; // sala criada pelo link fica fora da lista e sem senha; se já tiver senha, o servidor pede
+  const enter = (e) => { if (e.key === 'Enter' && !e.isComposing && !$('create').disabled) { e.preventDefault(); $('create').click(); } };
+  $('name').addEventListener('keydown', enter); $('pass').addEventListener('keydown', enter);
+  $('name').focus();
+})();
+
 // ---------- retomar após atualizar a página ----------
 (function resume() {
   const sv = readSess();
