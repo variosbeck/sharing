@@ -740,7 +740,7 @@ $('share').onclick = async () => {
   } catch { return; }
   addTile('local', local, 'Você', true);
   local.getVideoTracks()[0].onended = stopShare;
-  $('mode').disabled = true; $('modeBtn').disabled = true; $('amode').disabled = true; $('amode')._sync(); qScale = 1; calm = 0;
+  $('mode').disabled = true; $('modeBtn').disabled = true; $('amode').disabled = true; $('amode')._sync(); qScale = 1; calm = 0; weak = false;
   $('share').textContent = 'Parar de compartilhar';
   $('share').className = 'btn danger';
   try {
@@ -1083,8 +1083,8 @@ setInterval(async () => {
     }
   }
   if (local && pubScreen) { // qualidade automática: reduz quando há perda e volta aos poucos
-    if (sendLoss > 5) { qScale = Math.max(0.35, qScale * 0.75); calm = 0; applyQuality(); }
-    else if (sendLoss < 1.5) { if (++calm >= 3 && qScale < 1) { qScale = Math.min(1, qScale * 1.2); calm = 0; applyQuality(); } }
+    if (sendLoss > 5) { qScale = Math.max(0.35, qScale * 0.75); calm = 0; applyQuality(); if (!weak && qScale < 0.6) { weak = true; toast('Sua internet está instável. A qualidade da transmissão foi reduzida automaticamente.'); } }
+    else if (sendLoss < 1.5) { if (++calm >= 3 && qScale < 1) { qScale = Math.min(1, qScale * 1.2); calm = 0; applyQuality(); if (weak && qScale >= 0.95) { weak = false; toast('Conexão normalizada. Qualidade restaurada.'); } } }
     else calm = 0;
   }
   if (rtt === null) { el.hidden = true; return; }
@@ -1093,7 +1093,7 @@ setInterval(async () => {
   el.innerHTML = '<span class="dot ok"></span>' + Math.round(rtt) + ' ms · ' + loss.toFixed(1) + '% perda' + (local && qScale < 1 ? ' · auto ↓' : '');
 }, 2000);
 // ---------- câmera ----------
-let cam = null, qScale = 1, calm = 0, wl;
+let cam = null, qScale = 1, calm = 0, weak = false, wl;
 $('camBtn').onclick = async () => {
   if (cam) return stopCam();
   try { cam = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false }); }
