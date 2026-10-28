@@ -394,6 +394,7 @@ html.cinema .col{display:none}
             <button type="button" role="option" class="dd-item" data-v="1080-60" aria-selected="false"><span><b>1080p · 60 fps</b><small>Jogos, máxima fluidez</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
           </div>
         </div>
+        <select id="amode" hidden data-label="Áudio da transmissão"><option value="system" data-desc="Tudo que toca no PC, inclusive Discord">Áudio do sistema</option><option value="window" data-desc="Só o app ou guia escolhido. Não pega Discord">Só do app/guia (sem Discord)</option><option value="off" data-desc="Transmitir sem som">Sem áudio</option></select>
         <button class="btn primary" id="share">Compartilhar tela</button>
         <button class="btn" id="camBtn">Câmera</button>
         <button class="btn" id="cineBtn" title="Tecla C">Cinema</button>
@@ -543,6 +544,8 @@ async function onMessage(m) {
           await pc.setLocalDescription();
           send(m.from, { sdp: pc.localDescription });
         }
+      } else if (d.resync) {
+        resendShare(m.from);
       } else if (d.meta) {
         (p.meta = p.meta || {})[d.meta.sid] = d.meta.kind; tagStream(p, d.meta.sid);
       } else if (d.ice) {
@@ -557,7 +560,12 @@ function createPeer(id, name, initiator) {
   if (peers[id]) return peers[id];
   const pc = new RTCPeerConnection(ICE);
   const p = peers[id] = { pc, name, polite: me ? me > id : true, making: false, ignore: false };
-  pc.onconnectionstatechange = () => pc.connectionState === 'connected' && applyQuality();
+  pc.onconnectionstatechange = () => {
+    const st = pc.connectionState;
+    if (st === 'connected') { clearTimeout(p.dc); applyQuality(); }
+    else if (st === 'failed') { try { pc.restartIce(); } catch {} }
+    else if (st === 'disconnected') { clearTimeout(p.dc); p.dc = setTimeout(() => { if (peers[id] === p && pc.connectionState !== 'connected') { try { pc.restartIce(); } catch {} } }, 4000); }
+  };
   pc.onicecandidate = (e) => e.candidate && send(id, { ice: e.candidate });
   pc.onnegotiationneeded = async () => {
     try {
@@ -570,13 +578,17 @@ function createPeer(id, name, initiator) {
     const stream = e.streams[0];
     if (!stream) return;
     addTile(stream.id, stream, p.name, false);
-    const drop = () => { if (!stream.getTracks().some((t) => t.readyState === 'live' && !t.muted)) removeTile(stream.id); };
+    const drop = () => {
+      const tv = document.querySelector('[data-key="' + stream.id + '"] video');
+      if (tv && tv.srcObject !== stream) return; // já chegou uma transmissão nova com o mesmo id
+      if (!stream.getTracks().some((t) => t.readyState === 'live' && !t.muted)) removeTile(stream.id);
+    };
     e.track.onmute = drop; e.track.onended = drop;
     e.track.onunmute = () => addTile(stream.id, stream, p.name, false);
     stream.onremovetrack = drop;
   };
   if (initiator) pc.addTransceiver('video', { direction: 'recvonly' });
-  if (local) local.getTracks().forEach((t) => pc.addTrack(t, local));
+  if (local) { local.getTracks().forEach((t) => pc.addTrack(t, local)); preferH264(pc); }
   if (cam) { send(id, { meta: { sid: cam.id, kind: 'cam' } }); cam.getTracks().forEach((t) => pc.addTrack(t, cam)); }
   return p;
 }
@@ -595,20 +607,25 @@ $('share').onclick = async () => {
   if (local) return stopShare();
   try {
     const [qh, qf] = $('mode').value.split('-').map(Number); const game = qf === 60;
-    local = await navigator.mediaDevices.getDisplayMedia({
-      video: { width: { ideal: Math.round(qh * 16 / 9) }, height: { ideal: qh }, frameRate: { ideal: qf } },
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-      systemAudio: 'include',
-    });
+    const am = $('amode').value;
+    const opts = { video: { width: { ideal: Math.round(qh * 16 / 9) }, height: { ideal: qh }, frameRate: { ideal: qf } } };
+    if (am === 'off') opts.audio = false;
+    else {
+      opts.audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+      if (am === 'window') { opts.systemAudio = 'exclude'; opts.windowAudio = 'window'; } // Chrome/Brave 141+: só o áudio da janela ou guia escolhida
+      else { opts.systemAudio = 'include'; opts.windowAudio = 'system'; }
+    }
+    local = await navigator.mediaDevices.getDisplayMedia(opts);
     local.getVideoTracks()[0].contentHint = game ? 'motion' : 'detail';
     const at = local.getAudioTracks()[0];
     if (at) at.contentHint = 'music';
-    else toast('Sem áudio. No Chrome/Brave, compartilhe uma guia ou a tela inteira e marque “Compartilhar áudio”. Janelas não enviam som.');
+    else if (am === 'window') toast('Sem áudio. Nesse modo, escolha uma janela ou guia e marque “Compartilhar áudio”. Se não aparecer a opção, atualize o navegador (precisa da versão 141 ou mais nova).');
+    else if (am === 'system') toast('Sem áudio. No Chrome/Brave, compartilhe uma guia ou a tela inteira e marque “Compartilhar áudio”. Janelas não enviam som.');
   } catch { return; }
   addTile('local', local, 'Você', true);
-  Object.values(peers).forEach(({ pc }) => local.getTracks().forEach((t) => pc.addTrack(t, local)));
+  Object.values(peers).forEach(({ pc }) => { local.getTracks().forEach((t) => pc.addTrack(t, local)); preferH264(pc); });
   local.getVideoTracks()[0].onended = stopShare;
-  $('mode').disabled = true; $('modeBtn').disabled = true; qScale = 1; calm = 0;
+  $('mode').disabled = true; $('modeBtn').disabled = true; $('amode').disabled = true; $('amode')._sync(); qScale = 1; calm = 0;
   applyQuality();
   $('share').textContent = 'Parar de compartilhar';
   $('share').className = 'btn danger';
@@ -623,9 +640,29 @@ function stopShare() {
   }));
   removeTile('local');
   local = null;
-  $('mode').disabled = false; $('modeBtn').disabled = false;
+  $('mode').disabled = false; $('modeBtn').disabled = false; $('amode').disabled = false; $('amode')._sync();
   $('share').textContent = 'Compartilhar tela';
   $('share').className = 'btn primary';
+}
+
+// ---------- codec ----------
+// H264 costuma ser codificado pela placa de vídeo, o que pesa menos no processador durante jogos.
+function preferH264(pc) {
+  try {
+    const caps = RTCRtpSender.getCapabilities('video'); if (!caps) return;
+    const h = caps.codecs.filter((c) => /h264/i.test(c.mimeType)), rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
+    if (!h.length) return;
+    pc.getTransceivers().forEach((t) => { if (t.sender && t.sender.track && t.sender.track.kind === 'video' && !(cam && t.sender.track === cam.getVideoTracks()[0]) && t.setCodecPreferences) t.setCodecPreferences([...h, ...rest]); });
+  } catch (err) { console.warn('codec:', err); }
+}
+// Reenvia a tela para um participante (equivale a parar e iniciar de novo, sem o usuário precisar fazer nada).
+function resendShare(id) {
+  const p = peers[id]; if (!p || !local) return;
+  const tracks = local.getTracks();
+  p.pc.getSenders().forEach((s) => { if (s.track && tracks.includes(s.track)) { try { p.pc.removeTrack(s); } catch {} } });
+  tracks.forEach((t) => { try { p.pc.addTrack(t, local); } catch {} });
+  preferH264(p.pc);
+  setTimeout(applyQuality, 800);
 }
 
 // ---------- qualidade ----------
@@ -675,6 +712,7 @@ function toast(msg) {
   const t = $('toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 8000);
 }
+const IC_SYNC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5M4 20v-4.5h4.5"/></svg>';
 const IC_PIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M9 4h6l-1 5 3 3H7l3-3zM12 12v8"/></svg>';
 const IC_PIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1"/></svg>';
 let actx;
@@ -695,7 +733,7 @@ function addTile(key, stream, name, isLocal) {
     tile = document.createElement('div');
     tile.className = 'tile'; tile.dataset.key = key;
     tile.innerHTML = '<video autoplay playsinline></video><span class="tag"></span><button type="button" class="unmute" data-a="mute" hidden>Ativar som</button><div class="ctrl"><button type="button" class="pbtn" data-a="pause" aria-label="Pausar">' + IC_PAUSE +
-      '</button><button type="button" class="pbtn vol" data-a="mute" aria-label="Desativar som">' + IC_VOL + '</button><input class="vs" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume"><span class="who"></span><span class="res"></span><button type="button" class="pbtn" data-a="rot" aria-label="Girar ou espelhar" title="Girar / espelhar">' + IC_ROT + '</button><button type="button" class="pbtn" data-a="pin" aria-label="Fixar tela" title="Fixar tela">' + IC_PIN + '</button><button type="button" class="pbtn" data-a="pip" aria-label="Janela flutuante" title="Janela flutuante">' + IC_PIP + '</button><button type="button" class="pbtn" data-a="fs" aria-label="Tela cheia" title="Tela cheia · tecla F">' + IC_FS + '</button></div>';
+      '</button><button type="button" class="pbtn vol" data-a="mute" aria-label="Desativar som">' + IC_VOL + '</button><input class="vs" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume"><span class="who"></span><span class="res"></span><button type="button" class="pbtn" data-a="rot" aria-label="Girar ou espelhar" title="Girar / espelhar">' + IC_ROT + '</button><button type="button" class="pbtn" data-a="sync" aria-label="Recarregar transmissão" title="Recarregar transmissão">' + IC_SYNC + '</button><button type="button" class="pbtn" data-a="pin" aria-label="Fixar tela" title="Fixar tela">' + IC_PIN + '</button><button type="button" class="pbtn" data-a="pip" aria-label="Janela flutuante" title="Janela flutuante">' + IC_PIP + '</button><button type="button" class="pbtn" data-a="fs" aria-label="Tela cheia" title="Tela cheia · tecla F">' + IC_FS + '</button></div>';
     const v = tile.querySelector('video');
     v.muted = isLocal;
     if (isLocal) tile.classList.add('local');
@@ -709,6 +747,7 @@ function addTile(key, stream, name, isLocal) {
       const b = e.target.closest('button');
       if (!b) return;
       if (b.dataset.a === 'fs') return toggleFs(tile);
+      if (b.dataset.a === 'sync') { if (isLocal) return; const pid = tile.dataset.peer; if (pid) { send(pid, { resync: true }); toast('Pedi para recarregar a transmissão…'); } return; }
       if (b.dataset.a === 'rot') { v.dataset.r = ((+v.dataset.r || 0) + 1) % ROT.length; v.style.transform = ROT[v.dataset.r]; return; }
       if (b.dataset.a === 'pin') { const on = !tile.classList.contains('pin'); document.querySelectorAll('.tile.pin').forEach((t) => t.classList.remove('pin')); tile.classList.toggle('pin', on); return refreshEmpty(); }
       if (b.dataset.a === 'pip') { if (document.pictureInPictureElement === v) document.exitPictureInPicture(); else v.requestPictureInPicture().catch(() => toast('Seu navegador não permite a janela flutuante.')); return; }
@@ -873,7 +912,7 @@ function applyPerms() {
 function renderGates() {
   const s = can('share', me), c = can('cam', me), t = can('chat', me);
   $('share').disabled = !s; $('share').title = s ? '' : 'Só administradores podem compartilhar a tela';
-  $('modeBtn').disabled = !s || !!local;
+  $('modeBtn').disabled = !s || !!local; $('amode').disabled = !s || !!local; if ($('amode')._sync) $('amode')._sync();
   $('shareHint').textContent = (settings.perms.share === 'admins' ? 'Só administradores podem compartilhar a tela nesta sala.' : 'Qualquer pessoa na sala pode compartilhar a tela.') + ' Para ver maior, use a tela cheia.';
   $('camBtn').disabled = !c; $('camBtn').title = c ? '' : 'Só administradores podem usar a câmera';
   $('cin').disabled = !t; $('csend').disabled = !t; $('emojiBtn').disabled = !t;
@@ -916,14 +955,22 @@ setInterval(async () => {
   const el = $('stats');
   if ($('room').hidden || !Object.keys(peers).length) { el.hidden = true; return; }
   let rtt = null, loss = 0, sendLoss = 0;
-  for (const { pc } of Object.values(peers)) {
+  for (const [pid, pr] of Object.entries(peers)) {
+    const pc = pr.pc; let rx = null;
     try {
       (await pc.getStats()).forEach((r) => {
+        if (r.type === 'inbound-rtp' && r.kind === 'video') rx = (rx || 0) + (r.packetsReceived || 0);
         if (r.type === 'candidate-pair' && r.nominated && r.currentRoundTripTime != null) rtt = Math.max(rtt || 0, r.currentRoundTripTime * 1000);
         if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && r.fractionLost != null) sendLoss = Math.max(sendLoss, r.fractionLost * 100);
         if (r.type === 'inbound-rtp' && r.kind === 'video') loss = Math.max(loss, r.packetsLost / ((r.packetsReceived + r.packetsLost) || 1) * 100);
       });
     } catch {}
+    // vigia: tela aparece mas não chega nada há ~12 s → pede para quem transmite reenviar
+    if (rx !== null && document.querySelector('[data-peer="' + pid + '"]') && pc.connectionState === 'connected') {
+      if (rx === pr.rxLast) pr.stall = (pr.stall || 0) + 1; else pr.stall = 0;
+      pr.rxLast = rx;
+      if (pr.stall >= 6 && Date.now() - (pr.resyncAt || 0) > 30000) { pr.resyncAt = Date.now(); pr.stall = 0; send(pid, { resync: true }); }
+    } else { pr.stall = 0; pr.rxLast = rx; }
   }
   if (local) { // qualidade automática: reduz quando há perda e volta aos poucos
     if (sendLoss > 5) { qScale = Math.max(0.35, qScale * 0.75); calm = 0; applyQuality(); }
@@ -1065,7 +1112,7 @@ function enhanceSelect(sel) {
   document.addEventListener('click', (e) => { if (!menu.hidden && !menu.contains(e.target) && !btn.contains(e.target)) open(false); });
   sel._sync = sync; sync();
 }
-['catSel', ...CFG].forEach((id) => enhanceSelect($(id)));
+['catSel', ...CFG, 'amode'].forEach((id) => enhanceSelect($(id)));
 addEventListener('resize', closeDd); $('colL').addEventListener('scroll', closeDd);
 $('keysBtn').onclick = () => ($('keys').hidden = false);
 $('keysClose').onclick = () => ($('keys').hidden = true);
