@@ -640,7 +640,7 @@ function subscribe(from, m, attempt = 0) {
     try {
       const ns = await sfu('POST', 'sessions/new');
       if (sub.closed) return;
-      const res = await sfu('POST', 'sessions/' + ns.sessionId + '/tracks/new', { tracks: m.tracks.map((t) => ({ location: 'remote', sessionId: m.session, trackName: t.name })) });
+      const res = await sfu('POST', 'sessions/' + ns.sessionId + '/tracks/new', { tracks: m.tracks.map((t) => ({ location: 'remote', sessionId: m.session, trackName: t.name, ...(t.simul ? { simulcast: { preferredRid: 'f', priorityOrdering: 'asciibetical', ridNotAvailable: 'asciibetical' } } : {}) })) });
       if (sub.closed) return;
       const bad = (res.tracks || []).find((t) => t.errorCode);
       if (bad || !res.sessionDescription) throw new Error(bad ? bad.errorDescription || bad.errorCode : 'o SFU não devolveu a oferta');
@@ -659,7 +659,14 @@ async function publish(stream, kind) {
   const pc = new RTCPeerConnection(rtcCfg());
   const h = { pc, kind, sid: 'p' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4), session: null, tracks: [], mids: [], closed: false };
   try {
-    const trs = stream.getTracks().map((t) => ({ t, tr: pc.addTransceiver(t, { direction: 'sendonly', streams: [stream] }) }));
+    const SIM = [{ rid: 'f', scaleResolutionDownBy: 1 }, { rid: 'h', scaleResolutionDownBy: 2 }];
+    h.simul = false;
+    const trs = stream.getTracks().map((t) => {
+      if (kind === 'screen' && t.kind === 'video') {
+        try { const tr = pc.addTransceiver(t, { direction: 'sendonly', streams: [stream], sendEncodings: SIM }); h.simul = true; return { t, tr }; } catch (err) { console.warn('simulcast indisponível:', err); }
+      }
+      return { t, tr: pc.addTransceiver(t, { direction: 'sendonly', streams: [stream] }) };
+    });
     if (kind === 'screen') preferH264(trs.map((x) => x.tr));
     await pc.setLocalDescription(await pc.createOffer());
     await waitGather(pc);
@@ -674,7 +681,7 @@ async function publish(stream, kind) {
     const bad = (res.tracks || []).find((x) => x.errorCode);
     if (bad) throw new Error(bad.errorDescription || bad.errorCode);
     await pc.setRemoteDescription(res.sessionDescription);
-    h.tracks = list.map((x) => ({ name: x.name, kind: x.kind }));
+    h.tracks = list.map((x) => ({ name: x.name, kind: x.kind, simul: !!(h.simul && x.kind === 'video') }));
     await waitConnected(pc, 10000);
     return h;
   } catch (err) { try { pc.close(); } catch {} throw err; }
@@ -781,9 +788,12 @@ function applyQuality() {
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
       if (s.track.kind === 'audio') params.encodings[0].maxBitrate = 128000;
       else {
-        params.encodings[0].maxBitrate = bitrate;
-        params.encodings[0].maxFramerate = qf;
-        params.encodings[0].scaleResolutionDownBy = qScale < 0.6 ? 1.5 : 1;
+        const down = qScale < 0.6 ? 1.5 : 1;
+        params.encodings.forEach((en, i) => { // i = 0 camada cheia; i = 1 camada leve (metade da resolução) para celular e rede fraca
+          en.maxBitrate = i === 0 ? bitrate : Math.round(bitrate * 0.3);
+          en.maxFramerate = i === 0 ? qf : Math.min(qf, 30);
+          en.scaleResolutionDownBy = i === 0 ? down : 2 * down;
+        });
         params.degradationPreference = game ? 'maintain-framerate' : 'maintain-resolution';
       }
       await s.setParameters(params);
