@@ -417,6 +417,10 @@ let ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const BUDGET = 8_000_000; // upload total (bps) dividido entre os espectadores
 let ws, me, roomId, myName, local = null;
 const TOK = (() => { const mk = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36)); try { let t = localStorage.getItem('tela-tok'); if (!t) localStorage.setItem('tela-tok', (t = mk())); return t; } catch { return mk(); } })();
+const TAB = (() => { const mk = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36)); try { let t = sessionStorage.getItem('tela-tab'); if (!t) sessionStorage.setItem('tela-tab', (t = mk())); return t; } catch { return mk(); } })();
+const saveSess = () => { try { sessionStorage.setItem('tela-sessao', JSON.stringify({ room: roomId, name: myName, pass, priv: !isPublic, cat, desc: isPublic ? $('desc').value.trim() : '' })); } catch {} };
+const readSess = () => { try { return JSON.parse(sessionStorage.getItem('tela-sessao') || 'null'); } catch { return null; } };
+const clearSess = () => { try { sessionStorage.removeItem('tela-sessao'); } catch {} };
 let roles = {}, settings = { limit: 8, perms: { share: 'all', cam: 'all', chat: 'all' } }, bans = [];
 const myRole = () => roles[me] || 'member';
 const can = (k, id) => settings.perms[k] === 'all' || (!!roles[id] && roles[id] !== 'member');
@@ -445,7 +449,7 @@ let wantLeave = false, retry = 0, pass = '';
 function setStatus(ok) { $('stext').textContent = ok ? 'Conectado' : 'Reconectando…'; $('sdot').style.background = ok ? '' : '#f5b84b'; }
 function connect() {
   const sock = (ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'));
-  sock.onopen = () => sock.send(JSON.stringify({ type: 'join', prev: me || '', room: roomId, name: myName, tok: TOK, pass, public: isPublic, cat, desc: isPublic ? $('desc').value.trim() : '' }));
+  sock.onopen = () => sock.send(JSON.stringify({ type: 'join', prev: me || '', tab: TAB, room: roomId, name: myName, tok: TOK, pass, public: isPublic, cat, desc: isPublic ? $('desc').value.trim() : '' }));
   sock.onmessage = (e) => onMessage(JSON.parse(e.data));
   sock.onclose = () => {
     if (sock !== ws || wantLeave) return;
@@ -496,14 +500,14 @@ const send = (to, data) => ws.send(JSON.stringify({ type: 'signal', to, data }))
 
 async function onMessage(m) {
   if (m.type === 'full' || m.type === 'badpass' || m.type === 'needpass') {
-    wantLeave = true;
+    wantLeave = true; clearSess();
     if (m.type !== 'full') { setVis(false); $('pass').hidden = false; $('pass').focus(); }
     $('msg').textContent = m.type === 'full' ? 'Sala cheia (limite de ' + (m.limit || 8) + ' pessoas).' : m.type === 'needpass' ? 'Esta sala é privada. Digite a senha.' : 'Senha incorreta.';
     return;
   }
   if (m.type === 'banned' || m.type === 'kicked') {
     const t = m.type === 'banned' ? 'Você foi banido desta sala.' : 'Você foi removido da sala.';
-    if ($('room').hidden) { wantLeave = true; $('msg').textContent = t; } else leave(t);
+    if ($('room').hidden) { wantLeave = true; clearSess(); $('msg').textContent = t; } else leave(t);
     return;
   }
   if (m.type === 'denied') {
@@ -522,7 +526,7 @@ async function onMessage(m) {
     return;
   }
   if (m.type === 'hello') {
-    me = m.id; setStatus(true); retry = 0; Object.keys(peers).forEach(removePeer);
+    me = m.id; setStatus(true); retry = 0; saveSess(); Object.keys(peers).forEach(removePeer);
     $('msgs').innerHTML = ''; lastSender = null;
     (m.history || []).forEach((h) => addMsg(h.name, h.text, h.name === myName, false, h.ts, true));
     keepAwake();
@@ -884,7 +888,7 @@ $('copy').onclick = async () => {
 };
 $('leave').onclick = () => leave('');
 function leave(text) {
-  wantLeave = true; openCols(false); roles = {}; bans = []; settings = { limit: 8, perms: { share: 'all', cam: 'all', chat: 'all' } };
+  wantLeave = true; clearSess(); openCols(false); roles = {}; bans = []; settings = { limit: 8, perms: { share: 'all', cam: 'all', chat: 'all' } };
   try { wl && wl.release(); } catch {}
   if (cam) stopCam();
   cinema(false);
@@ -1120,7 +1124,13 @@ function notify(name, text) {
 function stopFlash() { clearInterval(flashT); flashT = null; document.title = baseTitle; }
 addEventListener('focus', stopFlash);
 async function keepAwake() { try { if (!$('room').hidden && navigator.wakeLock) wl = await navigator.wakeLock.request('screen'); } catch {} }
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { stopFlash(); keepAwake(); } });
+function wake() {
+  if ($('room').hidden || wantLeave) return;
+  if (!ws || ws.readyState > 1) { retry = 0; setStatus(false); connect(); return; } // conexão morreu em segundo plano: reentra já
+  if (ws.readyState === 1) Object.entries(peers).forEach(([id, p]) => Object.entries(p.pubInfo).forEach(([sid, pm]) => { const sb = p.subs[sid]; if (!sb || ['failed', 'closed', 'disconnected'].includes(sb.pc.connectionState)) subscribe(id, pm); }));
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { stopFlash(); keepAwake(); wake(); } });
+addEventListener('pageshow', wake); addEventListener('online', wake);
 
 // ---------- modo cinema ----------
 function cinema(on) { document.documentElement.classList.toggle('cinema', on); }
@@ -1220,6 +1230,16 @@ const EMO = '😀😂🤣😊😍😎🤔😅😭😡👍👎👏🙏🔥❤️�
 EMO.forEach((e) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = e; b.onclick = () => { const i = $('cin'); i.setRangeText(e, i.selectionStart, i.selectionEnd, 'end'); i.focus(); }; $('emojis').append(b); });
 $('emojiBtn').onclick = (ev) => { ev.stopPropagation(); $('emojis').hidden = !$('emojis').hidden; };
 document.addEventListener('click', (ev) => { if (!$('emojis').hidden && !$('emojis').contains(ev.target)) $('emojis').hidden = true; });
+// ---------- retomar após atualizar a página ----------
+(function resume() {
+  const sv = readSess();
+  if (!sv || !sv.room || !sv.name || sv.room !== slug(pathRoom)) return;
+  $('name').value = sv.name; syncName();
+  $('code').value = sv.room; setVis(!sv.priv);
+  if (sv.priv) $('pass').value = sv.pass || '';
+  if (sv.desc) $('desc').value = sv.desc;
+  cat = sv.cat || ''; start(sv.room);
+})();
 </script>
 </body>
 </html>
