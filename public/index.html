@@ -420,7 +420,7 @@ const TOK = (() => { const mk = () => (crypto.randomUUID ? crypto.randomUUID() :
 let roles = {}, settings = { limit: 8, perms: { share: 'all', cam: 'all', chat: 'all' } }, bans = [];
 const myRole = () => roles[me] || 'member';
 const can = (k, id) => settings.perms[k] === 'all' || (!!roles[id] && roles[id] !== 'member');
-const peers = {}; // id -> { pc, name, polite, making, ignore }
+const peers = {}; // id -> { name, subs: { sid -> recepção }, pubInfo: { sid -> anúncio } }
 
 // ---------- entrada ----------
 const params = new URLSearchParams(location.search);
@@ -445,7 +445,7 @@ let wantLeave = false, retry = 0, pass = '';
 function setStatus(ok) { $('stext').textContent = ok ? 'Conectado' : 'Reconectando…'; $('sdot').style.background = ok ? '' : '#f5b84b'; }
 function connect() {
   const sock = (ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'));
-  sock.onopen = () => sock.send(JSON.stringify({ type: 'join', room: roomId, name: myName, tok: TOK, pass, public: isPublic, cat, desc: isPublic ? $('desc').value.trim() : '' }));
+  sock.onopen = () => sock.send(JSON.stringify({ type: 'join', prev: me || '', room: roomId, name: myName, tok: TOK, pass, public: isPublic, cat, desc: isPublic ? $('desc').value.trim() : '' }));
   sock.onmessage = (e) => onMessage(JSON.parse(e.data));
   sock.onclose = () => {
     if (sock !== ws || wantLeave) return;
@@ -465,7 +465,7 @@ async function start(room) {
 $('create').onclick = () => {
   const room = slug($('code').value) || Math.random().toString(36).slice(2, 8);
   if (room.length < 3) { $('msg').textContent = 'O nome da sala precisa ter ao menos 3 letras ou números.'; return; }
-  if (['ice', 'rooms', 'ws'].includes(room)) { $('msg').textContent = 'Esse nome de sala é reservado.'; return; }
+  if (['ice', 'rooms', 'ws', 'sfu'].includes(room)) { $('msg').textContent = 'Esse nome de sala é reservado.'; return; }
   if (!isPublic && !$('pass').value) { $('msg').textContent = 'Salas privadas precisam de senha.'; $('pass').focus(); return; }
   $('code').value = room; start(room);
 };
@@ -506,7 +506,12 @@ async function onMessage(m) {
     if ($('room').hidden) { wantLeave = true; $('msg').textContent = t; } else leave(t);
     return;
   }
-  if (m.type === 'denied') { toast('Só administradores podem escrever no chat agora.'); return; }
+  if (m.type === 'denied') {
+    if (m.what === 'share') { toast('Só administradores podem compartilhar a tela agora.'); stopShare(); }
+    else if (m.what === 'cam') { toast('Só administradores podem usar a câmera agora.'); stopCam(); }
+    else toast('Só administradores podem escrever no chat agora.');
+    return;
+  }
   if (m.type === 'state') { applyState(m); return; }
   if (m.type === 'typing') { showTyping(m.name); return; }
   if (m.type === 'chat') {
@@ -524,87 +529,185 @@ async function onMessage(m) {
     if ($('room').hidden) openCols(matchMedia('(min-width:1100px)').matches);
     $('home').hidden = true; $('room').hidden = false;
     $('roomcode').textContent = roomId;
-    m.peers.forEach((p) => createPeer(p.id, p.name, true)); // quem chega inicia a conexão
+    m.peers.forEach((p) => addPeer(p.id, p.name));
+    (m.pubs || []).forEach(onPub); // transmissões que já estavam no ar
+    [pubScreen, pubCam].forEach((h) => h && announce(h)); // reconexão: anuncia de novo as minhas
     updateCount();
   } else if (m.type === 'join') {
-    createPeer(m.id, m.name, false); addMsg('', m.name + ' entrou na sala', false, true); beep(660, 880);
+    addPeer(m.id, m.name); addMsg('', m.name + ' entrou na sala', false, true); beep(660, 880);
     updateCount();
   } else if (m.type === 'leave') {
     addMsg('', (peers[m.id] ? peers[m.id].name : 'Alguém') + ' saiu da sala', false, true); removePeer(m.id);
-  } else if (m.type === 'signal') {
-    const p = peers[m.from] || createPeer(m.from, 'Participante', false);
-    const { pc } = p, d = m.data;
-    try {
-      if (d.sdp) {
-        const collision = d.sdp.type === 'offer' && (p.making || pc.signalingState !== 'stable');
-        p.ignore = !p.polite && collision;
-        if (p.ignore) return;
-        await pc.setRemoteDescription(d.sdp);
-        if (d.sdp.type === 'offer') {
-          await pc.setLocalDescription();
-          send(m.from, { sdp: pc.localDescription });
-        }
-      } else if (d.resync) {
-        resendShare(m.from);
-      } else if (d.meta) {
-        (p.meta = p.meta || {})[d.meta.sid] = d.meta.kind; tagStream(p, d.meta.sid);
-      } else if (d.ice) {
-        try { await pc.addIceCandidate(d.ice); } catch (err) { if (!p.ignore) throw err; }
-      }
-    } catch (err) { console.error(err); }
+  } else if (m.type === 'pub') {
+    onPub(m);
+  } else if (m.type === 'unpub') {
+    onUnpub(m);
   }
 }
 
-// ---------- conexões entre participantes ----------
-function createPeer(id, name, initiator) {
-  if (peers[id]) return peers[id];
-  const pc = new RTCPeerConnection(ICE);
-  const p = peers[id] = { pc, name, polite: me ? me > id : true, making: false, ignore: false };
-  pc.onconnectionstatechange = () => {
-    const st = pc.connectionState;
-    if (st === 'connected') { clearTimeout(p.dc); applyQuality(); }
-    else if (st === 'failed') { try { pc.restartIce(); } catch {} }
-    else if (st === 'disconnected') { clearTimeout(p.dc); p.dc = setTimeout(() => { if (peers[id] === p && pc.connectionState !== 'connected') { try { pc.restartIce(); } catch {} } }, 4000); }
-  };
-  pc.onicecandidate = (e) => e.candidate && send(id, { ice: e.candidate });
-  pc.onnegotiationneeded = async () => {
-    try {
-      p.making = true;
-      await pc.setLocalDescription();
-      send(id, { sdp: pc.localDescription });
-    } catch (err) { console.error(err); } finally { p.making = false; }
-  };
-  pc.ontrack = (e) => {
-    const stream = e.streams[0];
-    if (!stream) return;
-    addTile(stream.id, stream, p.name, false);
-    const drop = () => {
-      const tv = document.querySelector('[data-key="' + stream.id + '"] video');
-      if (tv && tv.srcObject !== stream) return; // já chegou uma transmissão nova com o mesmo id
-      if (!stream.getTracks().some((t) => t.readyState === 'live' && !t.muted)) removeTile(stream.id);
-    };
-    e.track.onmute = drop; e.track.onended = drop;
-    e.track.onunmute = () => addTile(stream.id, stream, p.name, false);
-    stream.onremovetrack = drop;
-  };
-  if (initiator) pc.addTransceiver('video', { direction: 'recvonly' });
-  if (local) { local.getTracks().forEach((t) => pc.addTrack(t, local)); preferH264(pc); }
-  if (cam) { send(id, { meta: { sid: cam.id, kind: 'cam' } }); cam.getTracks().forEach((t) => pc.addTrack(t, cam)); }
-  return p;
+// ---------- SFU da Cloudflare: chamadas ----------
+// O servidor guarda o segredo e repassa as chamadas. Aqui só falamos com o nosso servidor (/sfu/...).
+const rtcCfg = () => ({ iceServers: ICE.iceServers, bundlePolicy: 'max-bundle' });
+async function sfu(method, path, body) {
+  const r = await fetch('/sfu/' + path, { method, headers: { 'x-peer': me || '', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  let j = null; try { j = await r.json(); } catch {}
+  if (!r.ok || !j || j.errorCode) throw new Error((j && (j.errorDescription || j.error)) || 'erro ' + r.status);
+  return j;
+}
+function waitGather(pc, ms = 2500) { // o SFU não recebe candidatos depois: espera juntar (com limite)
+  return new Promise((res) => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const done = () => { pc.removeEventListener('icegatheringstatechange', chk); clearTimeout(t); res(); };
+    const chk = () => pc.iceGatheringState === 'complete' && done();
+    const t = setTimeout(done, ms);
+    pc.addEventListener('icegatheringstatechange', chk);
+  });
+}
+function waitConnected(pc, ms) {
+  return new Promise((res, rej) => {
+    if (pc.connectionState === 'connected') return res();
+    const end = (fn, v) => { clearTimeout(t); pc.removeEventListener('connectionstatechange', f); fn(v); };
+    const t = setTimeout(() => end(rej, new Error('tempo esgotado ao conectar no SFU (a rede pode estar bloqueando)')), ms);
+    const f = () => { if (pc.connectionState === 'connected') end(res); else if (pc.connectionState === 'failed') end(rej, new Error('a conexão com o SFU falhou')); };
+    pc.addEventListener('connectionstatechange', f);
+  });
 }
 
+// ---------- participantes e transmissões recebidas ----------
+// Cada transmissão (tela ou câmera) de outra pessoa chega por uma conexão própria com o SFU.
+function addPeer(id, name) { return peers[id] || (peers[id] = { name, subs: {}, pubInfo: {} }); }
 function removePeer(id) {
   const p = peers[id];
   if (!p) return;
-  p.pc.close();
+  Object.keys(p.subs).forEach((sid) => unsubscribe(id, sid));
   delete peers[id];
   document.querySelectorAll('[data-peer="' + id + '"]').forEach((el) => el.remove());
   refreshEmpty(); updateCount();
+}
+function onPub(m) {
+  if (m.from === me) return;
+  const p = addPeer(m.from, 'Participante');
+  p.pubInfo[m.sid] = m;
+  subscribe(m.from, m);
+}
+function onUnpub(m) {
+  const p = peers[m.from];
+  if (!p) return;
+  delete p.pubInfo[m.sid]; unsubscribe(m.from, m.sid); renderPeople();
+}
+function unsubscribe(from, sid) {
+  const p = peers[from], sub = p && p.subs[sid];
+  if (!sub) return;
+  sub.closed = true; clearTimeout(sub.timer); clearTimeout(sub.dc);
+  try { sub.pc.close(); } catch {}
+  delete p.subs[sid];
+  removeTile(sid);
+}
+function subscribe(from, m, attempt = 0) {
+  const p = addPeer(from, 'Participante');
+  unsubscribe(from, m.sid);
+  const sub = (p.subs[m.sid] = { m, pc: new RTCPeerConnection(rtcCfg()), closed: false, stream: new MediaStream(), got: 0, stall: 0, rxLast: -1 });
+  const show = () => {
+    if (sub.closed || !sub.stream.getTracks().length) return;
+    addTile(m.sid, sub.stream, p.name + (m.kind === 'cam' ? ' · câmera' : ''), false, { peer: from, cam: m.kind === 'cam' });
+    renderPeople();
+  };
+  const retry = (why) => {
+    if (sub.closed || p.subs[m.sid] !== sub) return;
+    console.warn('SFU (receber):', why);
+    unsubscribe(from, m.sid);
+    if (attempt < 4) setTimeout(() => { const q = peers[from]; if (q && q.pubInfo[m.sid] === m && !q.subs[m.sid]) subscribe(from, m, attempt + 1); }, 1500 * (attempt + 1));
+  };
+  sub.pc.ontrack = (e) => {
+    sub.stream.addTrack(e.track); sub.got++;
+    clearTimeout(sub.timer);
+    if (sub.got >= m.tracks.length) show(); else sub.timer = setTimeout(show, 1500);
+    e.track.onunmute = show;
+  };
+  sub.pc.onconnectionstatechange = () => {
+    const st = sub.pc.connectionState;
+    if (st === 'connected') clearTimeout(sub.dc);
+    else if (st === 'failed') retry('conexão falhou');
+    else if (st === 'disconnected') { clearTimeout(sub.dc); sub.dc = setTimeout(() => sub.pc.connectionState !== 'connected' && retry('conexão caiu'), 6000); }
+  };
+  (async () => {
+    try {
+      const ns = await sfu('POST', 'sessions/new');
+      if (sub.closed) return;
+      const res = await sfu('POST', 'sessions/' + ns.sessionId + '/tracks/new', { tracks: m.tracks.map((t) => ({ location: 'remote', sessionId: m.session, trackName: t.name })) });
+      if (sub.closed) return;
+      const bad = (res.tracks || []).find((t) => t.errorCode);
+      if (bad || !res.sessionDescription) throw new Error(bad ? bad.errorDescription || bad.errorCode : 'o SFU não devolveu a oferta');
+      await sub.pc.setRemoteDescription(res.sessionDescription);
+      await sub.pc.setLocalDescription(await sub.pc.createAnswer());
+      await waitGather(sub.pc);
+      if (sub.closed) return;
+      await sfu('PUT', 'sessions/' + ns.sessionId + '/renegotiate', { sessionDescription: { type: 'answer', sdp: sub.pc.localDescription.sdp } });
+    } catch (err) { retry(err.message); }
+  })();
+}
+
+// ---------- publicar (tela e câmera) ----------
+let pubScreen = null, pubCam = null;
+async function publish(stream, kind) {
+  const pc = new RTCPeerConnection(rtcCfg());
+  const h = { pc, kind, sid: 'p' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4), session: null, tracks: [], mids: [], closed: false };
+  try {
+    const trs = stream.getTracks().map((t) => ({ t, tr: pc.addTransceiver(t, { direction: 'sendonly', streams: [stream] }) }));
+    if (kind === 'screen') preferH264(trs.map((x) => x.tr));
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitGather(pc);
+    const ns = await sfu('POST', 'sessions/new');
+    h.session = ns.sessionId;
+    const list = trs.map(({ t, tr }) => ({ name: kind + '-' + t.kind, kind: t.kind, mid: tr.mid }));
+    h.mids = list.map((x) => x.mid);
+    const res = await sfu('POST', 'sessions/' + h.session + '/tracks/new', {
+      sessionDescription: { type: 'offer', sdp: pc.localDescription.sdp },
+      tracks: list.map((x) => ({ location: 'local', mid: x.mid, trackName: x.name })),
+    });
+    const bad = (res.tracks || []).find((x) => x.errorCode);
+    if (bad) throw new Error(bad.errorDescription || bad.errorCode);
+    await pc.setRemoteDescription(res.sessionDescription);
+    h.tracks = list.map((x) => ({ name: x.name, kind: x.kind }));
+    await waitConnected(pc, 10000);
+    return h;
+  } catch (err) { try { pc.close(); } catch {} throw err; }
+}
+function announce(h) {
+  if (ws && ws.readyState === 1 && h && !h.closed) ws.send(JSON.stringify({ type: 'pub', sid: h.sid, kind: h.kind, session: h.session, tracks: h.tracks }));
+}
+function closePub(h) {
+  if (!h || h.closed) return;
+  h.closed = true; clearTimeout(h.dc);
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'unpub', sid: h.sid }));
+  if (h.session && h.mids.length) sfu('PUT', 'sessions/' + h.session + '/tracks/close', { tracks: h.mids.map((mid) => ({ mid })), force: true }).catch(() => {});
+  try { h.pc.close(); } catch {}
+}
+function guardPub(h) { // se a conexão com o SFU cair, publica de novo sozinho
+  h.pc.onconnectionstatechange = () => {
+    const st = h.pc.connectionState;
+    if (st === 'connected') clearTimeout(h.dc);
+    else if (st === 'failed') republish(h.kind);
+    else if (st === 'disconnected') { clearTimeout(h.dc); h.dc = setTimeout(() => h.pc.connectionState !== 'connected' && republish(h.kind), 8000); }
+  };
+}
+async function republish(kind) {
+  const stream = kind === 'cam' ? cam : local, old = kind === 'cam' ? pubCam : pubScreen;
+  if (!stream || !old || old.closed || old.busy) return;
+  old.busy = true; toast('Reconectando a transmissão…');
+  closePub(old);
+  try {
+    const h = await publish(stream, kind);
+    if ((kind === 'cam' ? cam : local) !== stream) { closePub(h); return; }
+    if (kind === 'cam') pubCam = h; else pubScreen = h;
+    guardPub(h); announce(h); if (kind === 'screen') applyQuality();
+  } catch (err) { toast('Não consegui reconectar a transmissão: ' + err.message); if (kind === 'cam') stopCam(); else stopShare(); }
 }
 
 // ---------- compartilhar tela ----------
 $('share').onclick = async () => {
   if (local) return stopShare();
+  let mine;
   try {
     const [qh, qf] = $('mode').value.split('-').map(Number); const game = qf === 60;
     const am = $('amode').value;
@@ -615,7 +718,7 @@ $('share').onclick = async () => {
       if (am === 'window') { opts.systemAudio = 'exclude'; opts.windowAudio = 'window'; } // Chrome/Brave 141+: só o áudio da janela ou guia escolhida
       else { opts.systemAudio = 'include'; opts.windowAudio = 'system'; }
     }
-    local = await navigator.mediaDevices.getDisplayMedia(opts);
+    mine = local = await navigator.mediaDevices.getDisplayMedia(opts);
     local.getVideoTracks()[0].contentHint = game ? 'motion' : 'detail';
     const at = local.getAudioTracks()[0];
     if (at) at.contentHint = 'music';
@@ -623,21 +726,23 @@ $('share').onclick = async () => {
     else if (am === 'system') toast('Sem áudio. No Chrome/Brave, compartilhe uma guia ou a tela inteira e marque “Compartilhar áudio”. Janelas não enviam som.');
   } catch { return; }
   addTile('local', local, 'Você', true);
-  Object.values(peers).forEach(({ pc }) => { local.getTracks().forEach((t) => pc.addTrack(t, local)); preferH264(pc); });
   local.getVideoTracks()[0].onended = stopShare;
   $('mode').disabled = true; $('modeBtn').disabled = true; $('amode').disabled = true; $('amode')._sync(); qScale = 1; calm = 0;
-  applyQuality();
   $('share').textContent = 'Parar de compartilhar';
   $('share').className = 'btn danger';
+  try {
+    const h = await publish(mine, 'screen');
+    if (local !== mine) { closePub(h); return; } // parou enquanto conectava
+    pubScreen = h; guardPub(h); announce(h); applyQuality();
+  } catch (err) {
+    if (local === mine) { toast('Não consegui iniciar a transmissão: ' + err.message); stopShare(); }
+  }
 };
 
 function stopShare() {
   if (!local) return;
-  const tracks = local.getTracks();
-  tracks.forEach((t) => t.stop());
-  Object.values(peers).forEach(({ pc }) => pc.getSenders().forEach((s) => {
-    if (s.track && tracks.includes(s.track)) pc.removeTrack(s);
-  }));
+  local.getTracks().forEach((t) => t.stop());
+  closePub(pubScreen); pubScreen = null;
   removeTile('local');
   local = null;
   $('mode').disabled = false; $('modeBtn').disabled = false; $('amode').disabled = false; $('amode')._sync();
@@ -647,51 +752,37 @@ function stopShare() {
 
 // ---------- codec ----------
 // H264 costuma ser codificado pela placa de vídeo, o que pesa menos no processador durante jogos.
-function preferH264(pc) {
+function preferH264(transceivers) {
   try {
     const caps = RTCRtpSender.getCapabilities('video'); if (!caps) return;
     const h = caps.codecs.filter((c) => /h264/i.test(c.mimeType)), rest = caps.codecs.filter((c) => !/h264/i.test(c.mimeType));
     if (!h.length) return;
-    pc.getTransceivers().forEach((t) => { if (t.sender && t.sender.track && t.sender.track.kind === 'video' && !(cam && t.sender.track === cam.getVideoTracks()[0]) && t.setCodecPreferences) t.setCodecPreferences([...h, ...rest]); });
+    transceivers.forEach((tr) => { if (tr.sender.track && tr.sender.track.kind === 'video' && tr.setCodecPreferences) tr.setCodecPreferences([...h, ...rest]); });
   } catch (err) { console.warn('codec:', err); }
-}
-// Reenvia a tela para um participante (equivale a parar e iniciar de novo, sem o usuário precisar fazer nada).
-function resendShare(id) {
-  const p = peers[id]; if (!p || !local) return;
-  const tracks = local.getTracks();
-  p.pc.getSenders().forEach((s) => { if (s.track && tracks.includes(s.track)) { try { p.pc.removeTrack(s); } catch {} } });
-  tracks.forEach((t) => { try { p.pc.addTrack(t, local); } catch {} });
-  preferH264(p.pc);
-  setTimeout(applyQuality, 800);
 }
 
 // ---------- qualidade ----------
+// Agora só existe um envio (para o SFU), então o bitrate não é mais dividido entre os espectadores.
 function applyQuality() {
-  if (!local) return;
+  if (!local || !pubScreen) return;
   const [qh, qf] = $('mode').value.split('-').map(Number); const game = qf === 60;
-  const n = Math.max(1, Object.keys(peers).length);
-  const bitrate = Math.max(300_000, Math.round(Math.min(qh === 720 ? 3_500_000 : 6_000_000, Math.max(1_500_000, Math.floor(BUDGET / n))) * qScale));
-  Object.values(peers).forEach(({ pc }) => pc.getSenders().forEach(async (s) => {
-    if (!s.track || (cam && cam.getTracks().includes(s.track))) return;
-    if (s.track.kind === 'audio') {
-      try {
-        const ap = s.getParameters();
-        if (!ap.encodings || !ap.encodings.length) ap.encodings = [{}];
-        ap.encodings[0].maxBitrate = 128000;
-        await s.setParameters(ap);
-      } catch (err) {}
-      return;
-    }
+  const base = qh === 720 ? (game ? 5_000_000 : 3_500_000) : (game ? 9_000_000 : 6_000_000);
+  const bitrate = Math.max(300_000, Math.round(base * qScale));
+  pubScreen.pc.getSenders().forEach(async (s) => {
+    if (!s.track) return;
     try {
       const params = s.getParameters();
       if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-      params.encodings[0].maxBitrate = bitrate;
-      params.encodings[0].maxFramerate = qf;
-      params.encodings[0].scaleResolutionDownBy = qScale < 0.6 ? 1.5 : 1;
-      params.degradationPreference = game ? 'maintain-framerate' : 'maintain-resolution';
+      if (s.track.kind === 'audio') params.encodings[0].maxBitrate = 128000;
+      else {
+        params.encodings[0].maxBitrate = bitrate;
+        params.encodings[0].maxFramerate = qf;
+        params.encodings[0].scaleResolutionDownBy = qScale < 0.6 ? 1.5 : 1;
+        params.degradationPreference = game ? 'maintain-framerate' : 'maintain-resolution';
+      }
       await s.setParameters(params);
     } catch (err) { console.warn('qualidade:', err); }
-  }));
+  });
 }
 
 // ---------- interface ----------
@@ -727,7 +818,7 @@ function beep(a, b) {
 }
 function toggleFs(el) { document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen(); }
 
-function addTile(key, stream, name, isLocal) {
+function addTile(key, stream, name, isLocal, info) {
   let tile = document.querySelector('[data-key="' + key + '"]');
   if (!tile) {
     tile = document.createElement('div');
@@ -747,7 +838,7 @@ function addTile(key, stream, name, isLocal) {
       const b = e.target.closest('button');
       if (!b) return;
       if (b.dataset.a === 'fs') return toggleFs(tile);
-      if (b.dataset.a === 'sync') { if (isLocal) return; const pid = tile.dataset.peer; if (pid) { send(pid, { resync: true }); toast('Pedi para recarregar a transmissão…'); } return; }
+      if (b.dataset.a === 'sync') { if (isLocal) return; const pid = tile.dataset.peer, pm = peers[pid] && peers[pid].pubInfo[tile.dataset.key]; if (pm) { subscribe(pid, pm); toast('Recarregando a transmissão…'); } return; }
       if (b.dataset.a === 'rot') { v.dataset.r = ((+v.dataset.r || 0) + 1) % ROT.length; v.style.transform = ROT[v.dataset.r]; return; }
       if (b.dataset.a === 'pin') { const on = !tile.classList.contains('pin'); document.querySelectorAll('.tile.pin').forEach((t) => t.classList.remove('pin')); tile.classList.toggle('pin', on); return refreshEmpty(); }
       if (b.dataset.a === 'pip') { if (document.pictureInPictureElement === v) document.exitPictureInPicture(); else v.requestPictureInPicture().catch(() => toast('Seu navegador não permite a janela flutuante.')); return; }
@@ -763,8 +854,7 @@ function addTile(key, stream, name, isLocal) {
   vv.srcObject = stream;
   const pr = vv.play();
   if (pr) pr.catch(() => { vv.muted = true; syncMute(tile); }); // navegador bloqueou o som: mostra “Ativar som”
-  if (!isLocal) for (const id in peers) if (peers[id].pc.getReceivers().some((r) => stream.getTracks().includes(r.track))) tile.dataset.peer = id;
-  const pp = peers[tile.dataset.peer]; if (pp && pp.meta && pp.meta[key]) tagStream(pp, key);
+  if (info) { tile.dataset.peer = info.peer; if (info.cam) tile.dataset.cam = '1'; tile.querySelector('.tag').textContent = name; }
   refreshEmpty();
 }
 function removeTile(key) { document.querySelector('[data-key="' + key + '"]')?.remove(); refreshEmpty(); }
@@ -785,7 +875,7 @@ document.addEventListener('keydown', (e) => {
 });
 function updateCount() {
   renderPeople();
-  applyQuality(); const n = Object.keys(peers).length + 1; $('count').textContent = n + (n === 1 ? ' pessoa' : ' pessoas'); }
+  const n = Object.keys(peers).length + 1; $('count').textContent = n + (n === 1 ? ' pessoa' : ' pessoas'); }
 
 $('copy').onclick = async () => {
   try { await navigator.clipboard.writeText(location.href); $('copy').textContent = 'Link copiado'; }
@@ -953,26 +1043,30 @@ $('qrClose').onclick = () => ($('qr').hidden = true);
 // ---------- estatísticas de conexão ----------
 setInterval(async () => {
   const el = $('stats');
-  if ($('room').hidden || !Object.keys(peers).length) { el.hidden = true; return; }
+  const subs = []; Object.entries(peers).forEach(([id, p]) => Object.values(p.subs).forEach((sb) => subs.push([id, sb])));
+  const pubs = [pubScreen, pubCam].filter(Boolean);
+  if ($('room').hidden || (!subs.length && !pubs.length)) { el.hidden = true; return; }
   let rtt = null, loss = 0, sendLoss = 0;
-  for (const [pid, pr] of Object.entries(peers)) {
-    const pc = pr.pc; let rx = null;
+  const pair = (r) => { if (r.type === 'candidate-pair' && r.nominated && r.currentRoundTripTime != null) rtt = Math.max(rtt || 0, r.currentRoundTripTime * 1000); };
+  for (const h of pubs) {
+    try { (await h.pc.getStats()).forEach((r) => { pair(r); if (h === pubScreen && r.type === 'remote-inbound-rtp' && r.kind === 'video' && r.fractionLost != null) sendLoss = Math.max(sendLoss, r.fractionLost * 100); }); } catch {}
+  }
+  for (const [id, sb] of subs) {
+    let rx = null;
     try {
-      (await pc.getStats()).forEach((r) => {
-        if (r.type === 'inbound-rtp' && r.kind === 'video') rx = (rx || 0) + (r.packetsReceived || 0);
-        if (r.type === 'candidate-pair' && r.nominated && r.currentRoundTripTime != null) rtt = Math.max(rtt || 0, r.currentRoundTripTime * 1000);
-        if (r.type === 'remote-inbound-rtp' && r.kind === 'video' && r.fractionLost != null) sendLoss = Math.max(sendLoss, r.fractionLost * 100);
-        if (r.type === 'inbound-rtp' && r.kind === 'video') loss = Math.max(loss, r.packetsLost / ((r.packetsReceived + r.packetsLost) || 1) * 100);
+      (await sb.pc.getStats()).forEach((r) => {
+        pair(r);
+        if (r.type === 'inbound-rtp' && r.kind === 'video') { rx = (rx || 0) + (r.packetsReceived || 0); loss = Math.max(loss, r.packetsLost / ((r.packetsReceived + r.packetsLost) || 1) * 100); }
       });
     } catch {}
-    // vigia: tela aparece mas não chega nada há ~12 s → pede para quem transmite reenviar
-    if (rx !== null && document.querySelector('[data-peer="' + pid + '"]') && pc.connectionState === 'connected') {
-      if (rx === pr.rxLast) pr.stall = (pr.stall || 0) + 1; else pr.stall = 0;
-      pr.rxLast = rx;
-      if (pr.stall >= 6 && Date.now() - (pr.resyncAt || 0) > 30000) { pr.resyncAt = Date.now(); pr.stall = 0; send(pid, { resync: true }); }
-    } else { pr.stall = 0; pr.rxLast = rx; }
+    // vigia: a tela aparece mas nada chega há ~16 s → refaz a recepção sozinho
+    if (rx !== null && !sb.closed && sb.pc.connectionState === 'connected') {
+      if (rx === sb.rxLast) sb.stall++; else sb.stall = 0;
+      sb.rxLast = rx;
+      if (sb.stall >= 8 && Date.now() - (sb.m.resubAt || 0) > 30000) { sb.m.resubAt = Date.now(); subscribe(id, sb.m); }
+    }
   }
-  if (local) { // qualidade automática: reduz quando há perda e volta aos poucos
+  if (local && pubScreen) { // qualidade automática: reduz quando há perda e volta aos poucos
     if (sendLoss > 5) { qScale = Math.max(0.35, qScale * 0.75); calm = 0; applyQuality(); }
     else if (sendLoss < 1.5) { if (++calm >= 3 && qScale < 1) { qScale = Math.min(1, qScale * 1.2); calm = 0; applyQuality(); } }
     else calm = 0;
@@ -984,27 +1078,24 @@ setInterval(async () => {
 }, 2000);
 // ---------- câmera ----------
 let cam = null, qScale = 1, calm = 0, wl;
-function tagStream(p, sid) {
-  const t = document.querySelector('[data-key="' + sid + '"]');
-  if (!t) return;
-  const isCam = p.meta[sid] === 'cam';
-  t.querySelector('.tag').textContent = p.name + (isCam ? ' · câmera' : '');
-  if (isCam) t.dataset.cam = '1';
-  renderPeople();
-}
 $('camBtn').onclick = async () => {
   if (cam) return stopCam();
   try { cam = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false }); }
   catch { return toast('Não consegui acessar a câmera. Verifique a permissão do navegador.'); }
+  const mine = cam;
   addTile('cam-local', cam, 'Você · câmera', true);
-  Object.entries(peers).forEach(([id, { pc }]) => { send(id, { meta: { sid: cam.id, kind: 'cam' } }); cam.getTracks().forEach((t) => pc.addTrack(t, cam)); });
   cam.getVideoTracks()[0].onended = stopCam;
   $('camBtn').textContent = 'Desligar câmera';
+  try {
+    const h = await publish(mine, 'cam');
+    if (cam !== mine) { closePub(h); return; }
+    pubCam = h; guardPub(h); announce(h);
+  } catch (err) { if (cam === mine) { toast('Não consegui ligar a câmera: ' + err.message); stopCam(); } }
 };
 function stopCam() {
   if (!cam) return;
-  const tr = cam.getTracks(); tr.forEach((t) => t.stop());
-  Object.values(peers).forEach(({ pc }) => pc.getSenders().forEach((s) => { if (s.track && tr.includes(s.track)) pc.removeTrack(s); }));
+  cam.getTracks().forEach((t) => t.stop());
+  closePub(pubCam); pubCam = null;
   removeTile('cam-local'); cam = null; $('camBtn').textContent = 'Câmera';
 }
 
