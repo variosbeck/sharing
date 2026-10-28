@@ -306,7 +306,12 @@ html.cinema .col{display:none}
 .dd.sel .ddl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dd.sel .ddl.ph{color:var(--z500)}
 .panel .dd.sel .dd-btn{height:42px;font-size:14px}
-.dd-menu.fl{position:fixed;top:0;left:0;right:auto;bottom:auto;z-index:60;overflow:auto;overscroll-behavior:contain}
+.dd-menu.fl{position:fixed;top:0;left:0;right:auto;bottom:auto;z-index:60;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:rgba(var(--ov),.22) transparent}
+.dd-menu.fl::-webkit-scrollbar{width:6px}
+.dd-menu.fl::-webkit-scrollbar-track{background:transparent;margin:8px 0}
+.dd-menu.fl::-webkit-scrollbar-thumb{background:rgba(var(--ov),.22);border-radius:6px}
+.dd-menu.fl::-webkit-scrollbar-thumb:hover{background:rgba(var(--ov),.38)}
+.dd-menu.fl::-webkit-scrollbar-button{display:none;width:0;height:0}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 </head>
@@ -725,6 +730,7 @@ $('share').onclick = async () => {
     const [qh, qf] = $('mode').value.split('-').map(Number); const game = qf === 60;
     const am = $('amode').value;
     const opts = { video: { width: { ideal: Math.round(qh * 16 / 9) }, height: { ideal: qh }, frameRate: { ideal: qf } } };
+    if (game) opts.video.cursor = 'never'; // jogos prendem o mouse no centro: o cursor do sistema aparece parado no meio da transmissão
     if (am === 'off') opts.audio = false;
     else {
       opts.audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
@@ -1207,7 +1213,7 @@ function enhanceSelect(sel) {
     closeDd(); if (btn.disabled) return;
     menu.hidden = false; btn.setAttribute('aria-expanded', 'true');
     const r = btn.getBoundingClientRect(), below = innerHeight - r.bottom - 16, above = r.top - 16;
-    menu.style.minWidth = r.width + 'px'; menu.style.maxHeight = Math.max(160, Math.min(360, Math.max(below, above))) + 'px';
+    menu.style.minWidth = r.width + 'px'; menu.style.maxHeight = Math.max(160, Math.min(520, Math.max(below, above))) + 'px';
     const h = menu.offsetHeight, up = h > below && above > below;
     menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
     menu.style.top = (up ? Math.max(8, r.top - h - 8) : r.bottom + 8) + 'px';
