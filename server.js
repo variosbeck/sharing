@@ -154,9 +154,13 @@ wss.on('connection', (ws) => {
       if (!/^[\w-]{1,40}$/.test(room) || ['ice', 'rooms', 'ws', 'sfu'].includes(room)) return ws.close();
       ws.tok = String(m.tok || '').slice(0, 64) || ws.id;
       const pass = String(m.pass || '').slice(0, 40);
-      if (m.prev) { // reconexão: remove a conexão antiga (meio morta) do mesmo navegador antes de entrar
-        const old0 = rooms.get(room)?.peers.get(String(m.prev));
-        if (old0 && old0.tok === ws.tok) { removeFromRoom(old0); try { old0.close(); } catch {} }
+      ws.tab = String(m.tab || '').slice(0, 64);
+      { // reentrada (F5, rede móvel que caiu): remove a conexão antiga da mesma aba/navegador antes de entrar
+        const rr = rooms.get(room);
+        if (rr) for (const old0 of [...rr.peers.values()]) {
+          if (old0 === ws || old0.tok !== ws.tok) continue;
+          if (old0.id === String(m.prev || '') || (ws.tab && old0.tab === ws.tab)) { removeFromRoom(old0); try { old0.close(); } catch {} }
+        }
       }
       let r = rooms.get(room);
       if (r && isBanned(r, ws)) { out(ws, { type: 'banned' }); return ws.close(); }
