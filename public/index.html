@@ -529,6 +529,7 @@ async function onMessage(m) {
     const mine = m.id === me;
     if (typers[m.name]) { clearTimeout(typers[m.name]); delete typers[m.name]; renderTyping(); }
     addMsg(m.name, m.text, mine, false, m.ts);
+    sfx(mine ? 'send' : 'recv');
     if (!mine) notify(m.name, m.text);
     return;
   }
@@ -545,10 +546,10 @@ async function onMessage(m) {
     [pubScreen, pubCam].forEach((h) => h && announce(h)); // reconexão: anuncia de novo as minhas
     updateCount();
   } else if (m.type === 'join') {
-    addPeer(m.id, m.name); addMsg('', m.name + ' entrou na sala', false, true); beep(660, 880);
+    addPeer(m.id, m.name); addMsg('', m.name + ' entrou na sala', false, true); sfx('join');
     updateCount();
   } else if (m.type === 'leave') {
-    addMsg('', (peers[m.id] ? peers[m.id].name : 'Alguém') + ' saiu da sala', false, true); removePeer(m.id);
+    if (peers[m.id]) sfx('leave'); addMsg('', (peers[m.id] ? peers[m.id].name : 'Alguém') + ' saiu da sala', false, true); removePeer(m.id);
   } else if (m.type === 'pub') {
     onPub(m);
   } else if (m.type === 'unpub') {
@@ -604,6 +605,7 @@ function onPub(m) {
 function onUnpub(m) {
   const p = peers[m.from];
   if (!p) return;
+  if (m.kind !== 'cam' && !(p.pubInfo[m.sid] && p.pubInfo[m.sid].kind === 'cam') && document.querySelector('[data-key="' + m.sid + '"]')) sfx('shareStop');
   delete p.pubInfo[m.sid]; unsubscribe(m.from, m.sid); renderPeople();
 }
 function unsubscribe(from, sid) {
@@ -744,7 +746,7 @@ $('share').onclick = async () => {
     else if (am === 'window') toast('Sem áudio. Nesse modo, escolha uma janela ou guia e marque “Compartilhar áudio”. Se não aparecer a opção, atualize o navegador (precisa da versão 141 ou mais nova).');
     else if (am === 'system') toast('Sem áudio. No Chrome/Brave, compartilhe uma guia ou a tela inteira e marque “Compartilhar áudio”. Janelas não enviam som.');
   } catch { return; }
-  addTile('local', local, 'Você', true);
+  addTile('local', local, 'Você', true); sfx('shareStart');
   local.getVideoTracks()[0].onended = stopShare;
   $('mode').disabled = true; $('modeBtn').disabled = true; $('amode').disabled = true; $('amode')._sync(); qScale = 1; calm = 0; weak = false;
   $('share').textContent = 'Parar de compartilhar';
@@ -760,6 +762,7 @@ $('share').onclick = async () => {
 
 function stopShare() {
   if (!local) return;
+  sfx('shareStop');
   local.getTracks().forEach((t) => t.stop());
   closePub(pubScreen); pubScreen = null;
   removeTile('local');
@@ -828,14 +831,39 @@ function toast(msg) {
 const IC_SYNC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.6L4 15.5M4 20v-4.5h4.5"/></svg>';
 const IC_PIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M9 4h6l-1 5 3 3H7l3-3zM12 12v8"/></svg>';
 const IC_PIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="5" rx="1"/></svg>';
-let actx;
-function beep(a, b) {
+// ---------- efeitos sonoros (sintetizados, sem arquivos; baixos e suaves) ----------
+const SFX_VOL = 0.05; // volume geral: aumente para 0.08 se achar baixo
+const SFX = {
+  shareStart: [[523.25, 0, .13, 1], [783.99, .09, .2, 1]],        // sobe: tela no ar
+  shareStop:  [[659.25, 0, .12, .9], [440, .09, .22, .9]],        // desce: tela encerrada
+  join:       [[587.33, 0, .12, .9], [880, .08, .22, .9]],        // alguém entrou
+  leave:      [[493.88, 0, .12, .8], [369.99, .08, .22, .8]],     // alguém saiu
+  send:       [[880, 0, .09, .55]],                               // mensagem enviada (toque curto)
+  recv:       [[987.77, 0, .1, 1], [1318.51, .07, .2, 1]],        // mensagem recebida
+};
+let actx, sfxMaster; const sfxLast = {};
+function sfx(name) {
+  const def = SFX[name]; if (!def) return;
+  const now = Date.now(); if (now - (sfxLast[name] || 0) < 350) return; sfxLast[name] = now; // evita rajadas
   try {
-    actx = actx || new AudioContext(); if (actx.state === 'suspended') actx.resume();
-    const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
-    o.frequency.setValueAtTime(a, t); o.frequency.setValueAtTime(b, t + .09);
-    g.gain.setValueAtTime(.001, t); g.gain.exponentialRampToValueAtTime(.12, t + .02); g.gain.exponentialRampToValueAtTime(.001, t + .25);
-    o.connect(g).connect(actx.destination); o.start(t); o.stop(t + .26);
+    if (!actx) {
+      actx = new AudioContext();
+      const lp = actx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200; lp.Q.value = .4;
+      sfxMaster = actx.createGain(); sfxMaster.gain.value = SFX_VOL; sfxMaster.connect(lp).connect(actx.destination);
+    }
+    if (actx.state === 'suspended') actx.resume();
+    const t0 = actx.currentTime + .01;
+    def.forEach(([f, at, dur, v]) => {
+      const t = t0 + at;
+      [[f, 1], [f * 2, .12]].forEach(([fr, k]) => { // tom + um brilho suave uma oitava acima
+        const o = actx.createOscillator(), g = actx.createGain();
+        o.type = 'sine'; o.frequency.value = fr;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(v * k, t + .012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur + .12);
+        o.connect(g).connect(sfxMaster); o.start(t); o.stop(t + dur + .14);
+      });
+    });
   } catch {}
 }
 function toggleFs(el) { document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen(); }
@@ -870,7 +898,7 @@ function addTile(key, stream, name, isLocal, info) {
     });
     tile.addEventListener('dblclick', (e) => { if (!e.target.closest('button,input')) pinTile(tile); });
     $('grid').append(tile);
-    if (!isLocal) beep(880, 1175);
+    if (!isLocal && !(info && info.cam)) sfx('shareStart');
   }
   const vv = tile.querySelector('video');
   vv.srcObject = stream;
