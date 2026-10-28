@@ -136,11 +136,11 @@ main{flex:1;min-height:0;gap:12px}
 .dd-btn{gap:10px}
 .dd-btn svg{transition:transform .15s;transform:rotate(180deg);opacity:.7}
 .dd-btn[aria-expanded=true] svg{transform:none}
-.dd-menu{position:absolute;bottom:calc(100% + 8px);left:0;min-width:240px;z-index:20;padding:6px;border:1px solid rgba(var(--ov),.12);border-radius:14px;background:var(--pop);backdrop-filter:blur(14px);box-shadow:0 18px 50px rgba(0,0,0,.65);animation:menu .14s ease-out}
+.dd-menu{position:absolute;bottom:calc(100% + 8px);left:0;min-width:210px;max-width:min(300px,calc(100vw - 16px));z-index:20;padding:4px;border:1px solid rgba(var(--ov),.12);border-radius:12px;background:var(--pop);backdrop-filter:blur(14px);box-shadow:0 18px 50px rgba(0,0,0,.65);animation:menu .14s ease-out}
 @keyframes menu{from{opacity:0;transform:translateY(4px)}}
-.dd-item{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;padding:9px 12px;border:0;border-radius:9px;background:transparent;color:var(--z300);text-align:left;cursor:pointer}
-.dd-item b{display:block;font-size:13px;font-weight:600;color:var(--text)}
-.dd-item small{display:block;font-size:12px;color:var(--z500)}
+.dd-item{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:6px 10px;border:0;border-radius:8px;background:transparent;color:var(--z300);text-align:left;cursor:pointer}
+.dd-item b{display:block;font-size:12.5px;font-weight:600;color:var(--text)}
+.dd-item small{display:block;font-size:11px;line-height:1.35;color:var(--z500)}
 .dd-item:hover,.dd-item:focus-visible{background:rgba(var(--ov),.07);outline:none}
 .dd-item .ck{opacity:0;color:var(--accent)}
 .dd-item[aria-selected=true] .ck{opacity:1}
@@ -1241,7 +1241,7 @@ function enhanceSelect(sel) {
     closeDd(); if (btn.disabled) return;
     menu.hidden = false; btn.setAttribute('aria-expanded', 'true');
     const r = btn.getBoundingClientRect(), below = innerHeight - r.bottom - 16, above = r.top - 16;
-    menu.style.minWidth = r.width + 'px'; menu.style.maxHeight = Math.max(160, Math.min(520, Math.max(below, above))) + 'px';
+    menu.style.minWidth = Math.min(r.width, 220) + 'px'; menu.style.maxWidth = Math.min(300, innerWidth - 16) + 'px'; menu.style.maxHeight = Math.max(160, Math.min(520, Math.max(below, above))) + 'px';
     const h = menu.offsetHeight, up = h > below && above > below;
     menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
     menu.style.top = (up ? Math.max(8, r.top - h - 8) : r.bottom + 8) + 'px';
