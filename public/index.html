@@ -157,7 +157,8 @@ main{flex:1;min-height:0;gap:12px}
 .unmute{position:absolute;top:12px;right:12px;height:30px;padding:0 12px;border-radius:999px;border:1px solid rgba(240,82,79,.4);background:rgba(240,82,79,.18);color:#fff;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(6px)}
 .unmute:hover{background:rgba(240,82,79,.3)}
 #toast{position:fixed;left:50%;bottom:calc(88px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:30;max-width:min(92vw,520px);padding:12px 16px;border-radius:12px;border:1px solid rgba(var(--ov),.14);background:var(--pop);backdrop-filter:blur(12px);box-shadow:0 12px 40px rgba(0,0,0,.6);font-size:13px;line-height:1.5;color:var(--z300);text-align:center}
-.vs{width:72px;accent-color:#7c9cff}
+.vs{width:92px;height:22px;margin:0 2px;touch-action:none;cursor:pointer;accent-color:#7c9cff}
+@media(pointer:coarse){.vs{width:120px;height:32px}}
 .local .vs{display:none}
 .q-warn .dot{background:#f5b84b}.q-bad .dot{background:var(--live)}
 .tg{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--live)}
@@ -413,7 +414,7 @@ html.cinema .col{display:none}
             <button type="button" role="option" class="dd-item" data-v="1440-60" aria-selected="false"><span><b>2K · 60 fps</b><small>Máximo, exige PC e internet fortes</small></span><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
           </div>
         </div>
-        <select id="amode" hidden data-label="Áudio da transmissão"><option value="system" data-desc="Tudo que toca no PC, inclusive Discord">Áudio do sistema</option><option value="window" data-desc="Só o app ou guia escolhido. Não pega Discord">Só do app/guia (sem Discord)</option><option value="off" data-desc="Transmitir sem som">Sem áudio</option></select>
+        <select id="amode" hidden data-label="Áudio da transmissão"><option value="system" data-desc="Tudo que toca no PC, inclusive Discord">Áudio do sistema</option><option value="window" data-desc="Só o app ou guia escolhido, sem Discord. Tela inteira fica sem som">Só do app/guia (sem Discord)</option><option value="off" data-desc="Transmitir sem som">Sem áudio</option></select>
         <button class="btn primary" id="share">Compartilhar tela</button>
         <button class="btn" id="camBtn">Câmera</button>
         <button class="btn" id="cineBtn" title="Tecla C">Cinema</button>
@@ -755,6 +756,7 @@ $('share').onclick = async () => {
     local.getVideoTracks()[0].contentHint = game ? 'motion' : 'detail';
     const at = local.getAudioTracks()[0];
     if (at) at.contentHint = 'music';
+    else if (am === 'window' && local.getVideoTracks()[0].getSettings().displaySurface === 'monitor') toast('Tela inteira não envia som neste modo: o navegador só separa o áudio por janela ou guia. Para tela inteira com som, pare e escolha “Áudio do sistema” (inclui o Discord), ou compartilhe só a janela do jogo.');
     else if (am === 'window') toast('Sem áudio. Nesse modo, escolha uma janela ou guia e marque “Compartilhar áudio”. Se não aparecer a opção, atualize o navegador (precisa da versão 141 ou mais nova).');
     else if (am === 'system') toast('Sem áudio. No Chrome/Brave, compartilhe uma guia ou a tela inteira e marque “Compartilhar áudio”. Janelas não enviam som.');
   } catch { return; }
@@ -887,12 +889,14 @@ function addTile(key, stream, name, isLocal, info) {
     tile = document.createElement('div');
     tile.className = 'tile'; tile.dataset.key = key;
     tile.innerHTML = '<video autoplay playsinline></video><span class="tag"></span><button type="button" class="unmute" data-a="mute" hidden>Ativar som</button><div class="ctrl"><button type="button" class="pbtn" data-a="pause" aria-label="Pausar">' + IC_PAUSE +
-      '</button><button type="button" class="pbtn vol" data-a="mute" aria-label="Desativar som">' + IC_VOL + '</button><input class="vs" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume"><span class="who"></span><span class="res"></span><button type="button" class="pbtn" data-a="rot" aria-label="Girar ou espelhar" title="Girar / espelhar">' + IC_ROT + '</button><button type="button" class="pbtn" data-a="sync" aria-label="Recarregar transmissão" title="Recarregar transmissão">' + IC_SYNC + '</button><button type="button" class="pbtn" data-a="pin" aria-label="Fixar tela" title="Fixar tela">' + IC_PIN + '</button><button type="button" class="pbtn" data-a="pip" aria-label="Janela flutuante" title="Janela flutuante">' + IC_PIP + '</button><button type="button" class="pbtn" data-a="fs" aria-label="Tela cheia" title="Tela cheia · tecla F">' + IC_FS + '</button></div>';
+      '</button><button type="button" class="pbtn vol" data-a="mute" aria-label="Desativar som">' + IC_VOL + '</button><input class="vs" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume"><span class="who"></span><span class="res"></span><button type="button" class="pbtn" data-a="rot" aria-label="Girar ou espelhar" title="Girar / espelhar">' + IC_ROT + '</button><button type="button" class="pbtn" data-a="sync" aria-label="Recarregar transmissão" title="Recarregar transmissão">' + IC_SYNC + '</button><button type="button" class="pbtn" data-a="pin" aria-label="Fixar tela" title="Fixar tela">' + IC_PIN + '</button><button type="button" class="pbtn" data-a="pip" aria-label="Janela flutuante" title="Janela flutuante">' + IC_PIP + '</button><button type="button" class="pbtn" data-a="fs" aria-label="Tela cheia" title="Tela cheia · tecla F">' + IC_FS + '</button></div>';
     const v = tile.querySelector('video');
     v.muted = isLocal;
     if (isLocal) tile.classList.add('local');
     syncMute(tile);
-    tile.querySelector('.vs').oninput = (e) => { v.volume = e.target.value; v.muted = v.volume === 0; syncMute(tile); };
+    const vs = tile.querySelector('.vs');
+    const setVol = () => { const n = Math.min(1, Math.max(0, parseFloat(vs.value) || 0)); try { v.volume = n; } catch {} v.muted = n === 0; syncMute(tile); };
+    vs.addEventListener('input', setVol); vs.addEventListener('change', setVol);
     tile.querySelector('.tag').textContent = name;
     const res = tile.querySelector('.res');
     const upd = () => { if (v.videoWidth) res.textContent = v.videoWidth + '×' + v.videoHeight; };
