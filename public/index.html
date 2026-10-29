@@ -52,7 +52,11 @@ main{display:flex;flex-direction:column;gap:16px;padding-bottom:calc(20px + env(
 .tile video{display:block;width:100%;height:100%;object-fit:contain;background:#000}
 .tile:fullscreen{border-radius:0;border:0}
 .ctrl{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;padding:40px 12px 12px;background:linear-gradient(to top,rgba(0,0,0,.85),transparent);transition:opacity .2s}
-@media(hover:hover){.ctrl{opacity:0}.tile:hover .ctrl,.ctrl:focus-within{opacity:1}}
+.ctrl{opacity:0;pointer-events:none}
+.tile.ui .ctrl{opacity:1;pointer-events:auto}
+.tag{transition:opacity .2s}
+.tile:fullscreen:not(.ui) .tag,html.cinema .tile:not(.ui) .tag{opacity:0}
+.tile:fullscreen:not(.ui){cursor:none}
 .pbtn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:0;border-radius:8px;background:transparent;color:var(--z300);cursor:pointer}
 .pbtn:hover{background:rgba(var(--ov),.1);color:#fff}
 .who{flex:1;font-size:13px;color:#ececf1}
@@ -881,6 +885,30 @@ function sfx(name) {
     });
   } catch {}
 }
+// ---------- controles que somem sozinhos (tela cheia limpa) ----------
+function wireAutoHide(tile) {
+  let timer;
+  const v = tile.querySelector('video'), ctrl = tile.querySelector('.ctrl');
+  const kbFocus = () => { try { return ctrl.matches(':has(:focus-visible)'); } catch { return false; } };
+  const hideNow = () => { clearTimeout(timer); tile.classList.remove('ui'); };
+  const show = () => {
+    tile.classList.add('ui'); clearTimeout(timer);
+    timer = setTimeout(() => { if (!v.paused && !kbFocus()) tile.classList.remove('ui'); }, 3000);
+  };
+  tile._showUi = show;
+  tile.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse') show(); });
+  tile.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !document.fullscreenElement) hideNow(); });
+  tile.addEventListener('click', (e) => {
+    if (e.target.closest('button,input')) return show();
+    if (matchMedia('(hover:none)').matches) tile.classList.contains('ui') ? hideNow() : show(); // toque na imagem mostra ou esconde
+    else show();
+  });
+  ctrl.addEventListener('input', show);
+  v.addEventListener('pause', () => { tile.classList.add('ui'); clearTimeout(timer); });
+  v.addEventListener('play', show);
+  show();
+}
+document.addEventListener('fullscreenchange', () => { const t = document.fullscreenElement; if (t && t._showUi) t._showUi(); });
 function toggleFs(el) { document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen(); }
 
 function addTile(key, stream, name, isLocal, info) {
@@ -897,6 +925,7 @@ function addTile(key, stream, name, isLocal, info) {
     const vs = tile.querySelector('.vs');
     const setVol = () => { const n = Math.min(1, Math.max(0, parseFloat(vs.value) || 0)); try { v.volume = n; } catch {} v.muted = n === 0; syncMute(tile); };
     vs.addEventListener('input', setVol); vs.addEventListener('change', setVol);
+    wireAutoHide(tile);
     tile.querySelector('.tag').textContent = name;
     const res = tile.querySelector('.res');
     const upd = () => { if (v.videoWidth) res.textContent = v.videoWidth + '×' + v.videoHeight; };
